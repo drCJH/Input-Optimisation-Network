@@ -2,7 +2,7 @@
 import datetime
 import torch
 import torch.optim as optim
-import torch.utils.data as data
+import torch.utils.data as tdata
 import torch.nn as nn
 from time import time
 import math as maths
@@ -14,7 +14,7 @@ import argparse
 
 #import custom modules
 from out import logger, checkpoint
-from data import *
+import data
 from net import Net
 import cityscapes
 
@@ -23,9 +23,8 @@ import cityscapes
 #Arguments (name, default)
 params = [
 #dataset
-("dsRoot", "../data/")
-("variants", "cityscapes/leftImg8bit/,cityscapes/leftImg8bit_rain/,cityscapes/leftImg8bit_foggyDBF/,A2D2/images/"), #paths to sets of images to use
-("labels", "cityscapes/gtFine/,cityscapes/gtFine/,cityscapes/gtFine/,A2D2/labels/"),                                #paths to corresponding labels
+("dsRoot", "../data/"),
+("dspaths", "cityscapes/leftImg8bit/,cityscapes/leftImg8bit_rain/,cityscapes/leftImg8bit_foggyDBF/,A2D2/camera_lidar_semantic/"),
 ("sets", "train,val"),
 ("width", 384),
 ("height", 384),
@@ -69,7 +68,7 @@ for p in params:
 args = ap.parse_args()
 
 
-def run():    #avoids multithreading problems on windows
+def run():
     torch.backends.cudnn.benchmark=True
 
 
@@ -89,10 +88,10 @@ def run():    #avoids multithreading problems on windows
 
 
     #initalize datasets
-    datasets = data.PrepDataSets(args, o.log)
+    datasets = data.PrepDataSets(args)
     dataloaders = []  
     for d in datasets:
-        dataloaders.append(data.DataLoader(d, batch_size=args.batchsize, shuffle=not d.isVal, num_workers=4, pin_memory=True))
+        dataloaders.append(tdata.DataLoader(d, batch_size=args.batchsize, shuffle=not d.isVal, num_workers=4, pin_memory=True))
     dsnames = args.sets.split(',')
     
 
@@ -101,12 +100,8 @@ def run():    #avoids multithreading problems on windows
 
     #initialise nets
 
-    ION = Net(args.ION, o, input_sizes=datasets[0].input_sizes, output_sizes=[datasets[0].output_sizes[0]])
-
-    net2 = Net(args.seg, o, input_sizes=datasets[0].input_sizes, output_sizes=[datasets[0].output_sizes[0]])
-
-            
-        #net2 = network.deeplabv3plus_mobilenet(num_classes=19, output_stride=16, pretrained_backbone=False)
+    ION = Net(args.ION, o, input_size=datasets[0].input_size, output_size=[datasets[0].input_size[0]])
+    net2 = Net(args.targetnet, o, input_size=datasets[0].input_size, output_size=[datasets[0].output_size[0]])
 
     lr = args.lr
     opt = optim.Adam(ION.parameters(), lr=lr, weight_decay=args.weightdecay)
@@ -144,13 +139,8 @@ def run():    #avoids multithreading problems on windows
     o.log(("\nrunning on device:", device), include_time=True)
 
 
-    #net2.eval()
-
-
-    #class for loading/saving checkpoints
-    
+    #class for loading/saving checkpoints    
     cp = checkpoint(o, "./checkpoints/" + runid, args.loadepoch)
-
 
     if args.loadepoch != 0:  #load checkpoint        
         ION, opt = cp.load(ION, args.cpfolder, "ION", opt)
@@ -158,13 +148,8 @@ def run():    #avoids multithreading problems on windows
             net2, opt2 = cp.load(net2, args.cpfolder, "seg", opt2)
 
     if args.loadepoch == 0 or args.jointopt == 0:
-        net2.load_state_dict(torch.load(args.segCP))
+        net2.model.load_state_dict(torch.load(args.segCP))
     
-
-
-
-    timelastlog = 0
-
 
 
     #main loop
@@ -186,81 +171,76 @@ def run():    #avoids multithreading problems on windows
                   
 
         for d_i in range(len(dataloaders)):
-            #set nograd if validation set
             gradtype = torch.enable_grad()
             if datasets[d_i].isVal:                
-                gradtype = torch.no_grad()
-            
+                gradtype = torch.no_grad()            
                 
-                if datasets[d_i].isVal:
-                    ION.eval()
-                    net2.eval()
-                else:
-                    ION.train()
-                    if args.jointopt:
-                        net2.train()
+            if datasets[d_i].isVal:
+                ION.eval()
+                net2.eval()
+            else:
+                ION.train()
+                if args.jointopt:
+                    net2.train()
 
-                o.log(("\n-------------------------------"))
-                o.log("run id: " + runid + '\n')
-                o.log(("Epoch", cp.epoch), include_time=True)
-                o.log(("Dataset:", dsnames[d_i]))                
-                totiters = maths.ceil(len(datasets[d_i]) / args.batchsize)
-                t0 = time()
+            o.log(("\n-------------------------------"))
+            o.log("run id: " + runid + '\n')
+            o.log(("Epoch", cp.epoch), include_time=True)
+            o.log(("Dataset:", dsnames[d_i]))                
+            totiters = maths.ceil(len(datasets[d_i]) / args.batchsize)
+            t0 = time()
 
-                numiters = 0
+            numiters = 0
 
-                with gradtype:
-                    for b_i, batch in enumerate(dataloaders[d_i]):
+            with gradtype:
+                for b_i, batch in enumerate(dataloaders[d_i]):
+                
+                    opt.zero_grad()
+                    opt2.zero_grad()
+
+                    input, target, filenames = batch["image"], batch["target"], batch["filename"]
+                    output = ION(input.to(device))                                               
+                    segout = net2(output)
+                    loss = lossfn(segout, target.to(device))                        
                     
-                        opt.zero_grad()
-                        opt2.zero_grad()
+                    lossvals[d_i, cp.epoch-1] += loss.item()
 
-                        input, target, filenames = batch["image"], batch["target"], batch["filename"]
-                        output = ION(input)                                               
-                        segout = net2(output)
-                        loss = lossfn(segout, target)
+                    if not datasets[d_i].isVal:                            
+                        loss.backward()
+                        opt.step()
+                        if args.jointopt:
+                            opt2.step()
                         
+                    #print stats every 1/10 epoch
+                    if numiters > 0 and numiters % max(1, int(totiters / 10)) == 0:
+                        print("Iteration " +  str(numiters) + " of " + str(totiters) + " Loss: " + '{0:.4f}'.format(loss.item())) #don't log, just print to console
                         
-                        lossvals[d_i, cp.epoch-1] += loss.item()
 
-
-                        if not datasets[d_i].isVal:                            
-                            loss.backward()
-                            opt.step()
-                            if args.jointopt:
-                                opt2.step()
+                        if args.saveoutput:
+                            fname = 'E' + str(cp.epoch) + "_" + dsnames[d_i]                                
+                            fname += "_i" + str(b_i)                                                            
                             
-
-                        if numiters > 0 and numiters % max(1, int(totiters / 100)) == 0:
-                            print("Iteration " +  str(numiters) + " of " + str(totiters // 10) + " Loss: " + '{0:.4f}'.format(loss.item())) #don't log, just print to console
+                            o.save_image(input[0,...], fname + "_input.png")
+                            o.save_image(output[0,...], fname + "_output.png")                                
                             
+                            outseg = cityscapes.displayseg(segout[0,:])
+                            target = cityscapes.displayseg(target[0,:])
+                            o.save_image(outseg, fname + "_outseg" + ".png")
+                            o.save_image(target, fname + "_target" + ".png")
 
-                            if args.saveoutput:
-                                fname = 'E' + str(cp.epoch) + "_" + dsnames[d_i]                                
-                                fname += "_i" + str(b_i)                                                            
-                                
-                                o.save_image(input[0,...], fname + "_input.png")
-                                o.save_image(output[0,...], fname + "_output.png")                                
-                                
-                                outseg = cityscapes.displayseg(segout[0,:])
-                                target = cityscapes.displayseg(target[0,:])
-                                o.save_image(outseg, fname + "_outseg" + ".png")
-                                o.save_image(target, fname + "_target" + ".png")
-
-                        numiters += 1
+                    numiters += 1
 
 
-                
-                lossvals[d_i, cp.epoch-1] /= numiters
-                
-                
-                o.log(("\nTotal iterations:", numiters), include_time=True)
-                o.log(("Time taken:", o.formatTime(time() - t0)))                
-                o.log(("loss:", '{0:.4f}'.format(lossvals[n_i, d_i, cp.epoch-1].item())))
-                o.log("-------------------------------\n")
+            
+            lossvals[d_i, cp.epoch-1] /= numiters
+            
+            
+            o.log(("\nTotal iterations:", numiters), include_time=True)
+            o.log(("Time taken:", o.formatTime(time() - t0)))                
+            o.log(("loss:", '{0:.4f}'.format(lossvals[d_i, cp.epoch-1].item())))
+            o.log("-------------------------------\n")
 
-        #save checkpoint
-        
+        #save checkpoint        
         cp.save(ION, opt, "ION")
         if args.jointopt:
             cp.save(net2, opt2, "seg")
@@ -274,6 +254,6 @@ def run():    #avoids multithreading problems on windows
     o.log(("finished after", args.maxepochs, "epochs"), include_time=True)
                     
         
-#avoids multithreading problems on windows    
+
 if __name__ == '__main__':
     run()

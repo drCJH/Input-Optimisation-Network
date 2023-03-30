@@ -92,12 +92,11 @@ class logger():
         colours = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
         ax = []
         colidx = 0
-        for i in range(loss.shape[0]):
-            for j in range(loss.shape[1]):            
-                lbl = datanames[j]                                
+        for i in range(loss.shape[0]):        
+            lbl = datanames[i]                                
                 
-                ax.append(plt.plot(range(eprange[0]+1, eprange[-1]+2), loss[i,j,eprange], color=colours[colidx], label=lbl))
-                colidx += 1
+            ax.append(plt.plot(range(eprange[0]+1, eprange[-1]+2), loss[i,eprange], color=colours[colidx], label=lbl))
+            colidx += 1
 
         plt.legend()
         plt.ylabel('loss')
@@ -137,7 +136,7 @@ class checkpoint():
 
     def save(self, net, opt=None, identifier=""):        
             #save network weights
-            torch.save(net.state_dict(), self.dir + "epoch_" + str(self.epoch) + identifier)
+            torch.save(net.model.state_dict(), self.dir + "epoch_" + str(self.epoch) + identifier)
             #save optimiser if passed
             if opt != None:
                 torch.save(opt.state_dict(), self.dir + "optim_" + str(self.epoch) + identifier)
@@ -158,7 +157,7 @@ class checkpoint():
         #load checkpoint
         
         self.log.log("loading checkpoint:" + cpfolder + "epoch_" + str(self.epoch) + identifier)
-        net.load_state_dict(torch.load(cpfolder + "epoch_" + str(self.epoch) + identifier))        
+        net.model.load_state_dict(torch.load(cpfolder + "epoch_" + str(self.epoch) + identifier))        
         
         if opt != None:            
             self.log.log("loading optimizer:" + cpfolder + "optim_" + str(self.epoch) + identifier)

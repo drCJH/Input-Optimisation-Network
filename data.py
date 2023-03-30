@@ -12,6 +12,7 @@ import matplotlib.colors as colours
 #import custom modules
 from out import logger
 import cityscapes
+import A2D2
 
 
 def display(images):
@@ -104,49 +105,40 @@ def preprocess(image, args, target, isVal=False):
     return image, target
    
 
-def PrepDataSets(args, log):
+def PrepDataSets(args):
     datasets = []
     sets = args.sets.split(',')
     for s in sets:
-        datasets.append(segmentation_dataset(args, s, log))
+        datasets.append(segmentation_dataset(args, s))
     return datasets
 
 
 class segmentation_dataset(data.Dataset):
 
-    def __init__(self, args, set, log):
+    def __init__(self, args, set):
 
         dsroot = args.dsRoot
-        variants = args.variants.split(',')
-        labels = args.labels.split(',')
+        dspaths = args.dspaths.split(',')
 
         self.isVal = set in ["val", "test"]        
         self.args = args
-        self.samples = [[]] * len(variants)
-        self.targets = [[]] * len(labels)
+        self.samples = []
+        self.targets = []
+        self.trainIDs = []
 
-        for i in range(len(variants)):
-            ipath = dsroot + variants[i] + set + '/'
-            lpath = dsroot + labels[i] + set + '/'
-
-            for folder in os.listdir(ipath):
-
-                if "A2D2" in ipath:
-                    folder += "/camera/cam_front_center"
-
-                for fn in os.listdir(ipath + folder):
-                    if fn[-4:] == ".png":
-                        self.samples[i].append(ipath + folder + '/' + fn)
-
-                        if "cityscapes" in ipath:
-                            fn2 = fn[:fn.find("_left")] + "_gtFine_labelIds.png"
-                            self.targets[i].append(lpath + folder + '/' + fn2)
-                        elif "A2D2" in ipath:                                                    
-                            fn2 = fn.replace("_camera_fr", "_label_fr")
-                            self.targets[i].append(lpath + folder + '/' + fn2)                
-                
-        self.input_sizes = [list(im.shape) for im in self.__getitem__(0)["image"]] 
-        self.output_sizes = [list(im.shape) for im in self.__getitem__(0)["image"]] 
+        for i in range(len(dspaths)):
+            imgs, lbls, tIDs = [], [], False
+            if "A2D2" in dspaths[i]:
+                imgs, lbls = A2D2.GetFilenames(dsroot + dspaths[i], set)
+            elif "cityscapes" in dspaths[i]:
+                imgs, lbls, tIDs = cityscapes.GetFilenames(dsroot + dspaths[i], set)
+            self.samples.append(imgs)
+            self.targets.append(lbls)
+            self.trainIDs.append(tIDs)
+             
+        #retrieve sample to check expected input/output size 
+        self.input_size = self.__getitem__(0)["image"].shape
+        self.output_size = self.__getitem__(0)["target"].shape
 
 
     def __len__(self):
@@ -158,7 +150,7 @@ class segmentation_dataset(data.Dataset):
             
 
     def __getitem__(self, idx):
-        #select subset at random
+        #select subset at random so each gets balanced use regardless of size
         ss = random.randint(0, len(self.samples) - 1)
         while idx >= len(self.samples[ss]):
             idx = random.randint(0, len(self.samples[ss]) - 1)
@@ -166,12 +158,16 @@ class segmentation_dataset(data.Dataset):
         image = Image.open(self.samples[ss][idx])               
         target = Image.open(self.targets[ss][idx])   
 
-        image, target = preprocess(image, self.args, target, isVal=self.isVal)
-                
+        image, target = preprocess(image, self.args, target, isVal=self.isVal)                
         image = torch.from_numpy(image.transpose(2, 0, 1))
-        target = cityscapes.idtotrainid(target)
+
+        if not self.trainIDs[ss]:
+            if ("cityscapes" in self.targets[ss][idx]):
+                target = cityscapes.idtotrainid(target)
+            elif ("A2D2" in self.targets[ss][idx]):
+                target = A2D2.colourtotrainid(target)
+
         target = torch.from_numpy(target).long()
 
         #display([image, target])
-
         return {"image": image, "target": target, "filename": self.samples[ss][idx]}

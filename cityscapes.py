@@ -1,5 +1,6 @@
 import numpy as np
 from collections import namedtuple
+import os
 
 CityscapesClass = namedtuple('CityscapesClass', ['name', 'id', 'train_id', 'category', 'category_id',
                                                      'has_instances', 'ignore_in_eval', 'colour'])
@@ -44,8 +45,7 @@ classes = [
 
 def idtotrainid(im0):
     mapping = np.array([c.train_id for c in classes])
-    im1 = im0.cpu().detach().numpy()
-    return mapping[np.array(im1)]    
+    return mapping[np.array(im0)]    
 
 
 def displayseg(im0):    
@@ -64,3 +64,32 @@ def displayseg(im0):
             im2[im1 == t_id, 1] = G
             im2[im1 == t_id, 2] = B
     return im2
+
+def GetFilenames(rootdir, set):    
+    trainIDs = False
+
+
+    samples = []
+    targets = []
+    imgpath = rootdir + set + '/'
+    lblpath = rootdir[:rootdir.find("/left")]+"/gtFine/" + set + '/'
+    for folder in os.listdir(imgpath):
+        for f in os.listdir(imgpath + folder):
+            if f[-4:] == ".png":
+                samples.append(imgpath + folder + '/' + f)               
+
+                if len(targets) == 0:
+                    #check if labels have already been reformatted with train IDs
+                    f_lbl = f[:f.find("_left")] + "_gtFine_labelTrainIds.png"
+                    if os.path.exists(lblpath + folder + '/' + f_lbl):
+                        trainIDs = True
+
+                if trainIDs:                    
+                    f_lbl = f[:f.find("_left")] + "_gtFine_labelTrainIds.png"                    
+                else:                    
+                    f_lbl = f[:f.find("_left")] + "_gtFine_labelIds.png"
+                
+                targets.append(lblpath + folder + '/' + f_lbl)
+
+
+    return (samples, targets, trainIDs)    

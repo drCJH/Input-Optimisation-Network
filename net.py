@@ -11,15 +11,15 @@ import ION_unet
 
 class Net(nn.Module):
 
-    def __init__(self, arch, o, input_sizes=None, output_sizes=None):
+    def __init__(self, arch, o, input_size=None, output_size=None, normalise_output=True):
         super(Net, self).__init__()
 
-        o.log("building net: " + arch)
+        o.log("initialising model: " + arch)
 
         if arch.lower() == "deeplabv3":
             self.model = network.deeplabv3plus_mobilenet(num_classes=19, output_stride=16, pretrained_backbone=False)
         elif "unet" in arch.lower():
-            self.model = ION_unet.unet(arch, input_sizes, output_sizes)
+            self.model = ION_unet.unet(arch, input_size, output_size)
         else:
             o.log("invalid architecture: '" + arch + "'")
             exit()
@@ -27,14 +27,16 @@ class Net(nn.Module):
         o.log("model contains " + str(sum(p.numel() for p in self.model.parameters())) + " parameters")
         
         self._initialize_weights()
+        self.normOut = normalise_output
 
 
     def forward(self, x):
         #self.zerograd()
         y = self.model.forward(x)
 
-        y[0] = y[0] - y[0].mean()
-        y[0] = y[0] / y[0].std()
+        if self.normOut:
+            y = y - y.mean()
+            y = y / y.std()
 
         return y
 

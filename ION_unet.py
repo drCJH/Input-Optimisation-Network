@@ -5,18 +5,18 @@ import sys
 import numpy as np
 import math as maths
 from torchvision import transforms
-import network
+
 
 
 class unet(nn.Module):
 
-    def __init__(self, arch, input_sizes, output_sizes):
-        super(Net, self).__init__()
+    def __init__(self, arch, input_size, output_size):
+        super(unet, self).__init__()
 
 
         if arch.lower() == "unet":
             
-            i_sz0 = 384
+            i_sz0 = min(input_size[1], input_size[2])
             i_sz = i_sz0
             
             config = [('C', 64), ('B'), ('R'), ('C'), ('B'), ('R')]
@@ -41,7 +41,6 @@ class unet(nn.Module):
 
             #build equal length decoder with skip connections
             skip_con = -1
-            #while i_sz < min(input_sizes[0][1], input_sizes[0][2]):
             while i_sz < i_sz0:
                 #change feat_inc if num_feats is a power of 2
                 num_feats -= feat_inc
@@ -56,13 +55,12 @@ class unet(nn.Module):
                
 
 
-            config += [('C', output_sizes[0][0], 1), ('B',), ('H',)]
+            config += [('C', output_size[0], 1), ('B',), ('H',)]
             routing += [(-1, 'i0'), (-1,), (-1,)]
 
         elif arch.lower() == "unets":
-            
-            #i_sz = min(input_sizes[0][1], input_sizes[0][2])
-            i_sz0 = 384
+            #smaller model            
+            i_sz0 = min(input_size[1], input_size[2])
             i_sz = i_sz0
             
             #in convolution
@@ -88,7 +86,6 @@ class unet(nn.Module):
 
             #build equal length decoder with skip connections
             skip_con = -1
-            #while i_sz < min(input_sizes[0][1], input_sizes[0][2]):
             while i_sz < i_sz0:
                 #change feat_inc if num_feats is a power of 2
                 num_feats -= feat_inc
@@ -103,13 +100,12 @@ class unet(nn.Module):
                
 
 
-            config += [('C', output_sizes[0][0], 1), ('B',), ('H',)]
+            config += [('C', output_size[0], 1), ('B',), ('H',)]
             routing += [(-1, 'i0'), (-1,), (-1,)]
 
         elif arch.lower() == "unetss":
-            
-            #i_sz = min(input_sizes[0][1], input_sizes[0][2])
-            i_sz0 = 384
+            #smallest model
+            i_sz0 = min(input_size[1], input_size[2])
             i_sz = i_sz0
             
             #in convolution
@@ -136,7 +132,6 @@ class unet(nn.Module):
 
             #build equal length decoder with skip connections
             skip_con = -1
-            #while i_sz < min(input_sizes[0][1], input_sizes[0][2]):
             while i_sz < i_sz0:
                 #change feat_inc if num_feats is a power of 2
                 num_feats -= feat_inc
@@ -151,16 +146,15 @@ class unet(nn.Module):
                
 
 
-            config += [('C', output_sizes[0][0], 1), ('B',), ('H',)]
+            config += [('C', output_size[0], 1), ('B',), ('H',)]
             routing += [(-1, 'i0'), (-1,), (-1,)]
 
-        self.model = NetBuilder(config, input_sizes, routing=routing)
+        self.model = NetBuilder(config, input_size, routing=routing)
 
 
 
 
     def forward(self, x):
-        #self.zerograd()
         y = self.model.forward(x)
         return y
 
@@ -202,20 +196,6 @@ def buildconv(l, in_sz, bias=True):
     test_out = layer(test_in)
 
     return layer, test_out.shape[1:]
-
-
-def buildlinear(l, in_sz):    
-
-    out_sz = in_sz
-    bias = 1
-
-    if len(l) > 1:
-        out_sz = l[1]
-
-    if len(l) > 2:
-        bias = l[2]
-    
-    return nn.Linear(in_sz, out_sz, bias=bias), [out_sz, 1, 1]
 
 
 def buildpool(l, in_sz):    
@@ -277,7 +257,7 @@ def buildtranspose(l, in_sz, out_sz=[]):
 
 class NetBuilder(nn.Module):
     
-    def __init__(self, layers, model_input_sizes, model_outputs=[-1], routing=[("i0",)]):
+    def __init__(self, layers, model_input_size, model_outputs=[-1], routing=[("i0",)]):
         super(NetBuilder, self).__init__()
 
         
@@ -306,26 +286,18 @@ class NetBuilder(nn.Module):
 
         input_dimensions = 3
 
+        #Arrays for storing all layer expected input/output sizes
         layer_output_sizes = np.zeros((len(layers), input_dimensions), dtype=np.int)
-        layer_input_sizes = np.zeros((len(layers), input_dimensions), dtype=np.int)
-
-        
+        layer_input_sizes = np.zeros((len(layers), input_dimensions), dtype=np.int)        
 
         for i in range(len(layers)):             
             for r in routing[i]:                
                 if 'i' in str(r):              
-                    #layer takes model input as input
-                    try:
-                        if layer_input_sizes[i,0] == 0:
-                            layer_input_sizes[i,:] = model_input_sizes[int(r[1:])]                       
-                        else:
-                            layer_input_sizes[i,0] += model_input_sizes[int(r[1:])][0]  
-                    except:
-                        if layer_input_sizes[i,0] == 0:
-                            layer_input_sizes[i,:] = model_input_sizes[0]
-                        else:
-                            layer_input_sizes[i,0] += model_input_sizes[0][0]
-                        r = "i0"                       
+                    #i denotes layer receives model input                    
+                    if layer_input_sizes[i,0] == 0:
+                        layer_input_sizes[i,:] = model_input_size                      
+                    else:
+                        layer_input_sizes[i,0] += model_input_size[0]                                           
                 else:
                     try:
                         #cast as int just in case 
@@ -349,14 +321,6 @@ class NetBuilder(nn.Module):
                 self.model.append(layer)                
                 layer_output_sizes[i,:] = out_size                
                 
-            elif layers[i][0].upper() == 'L':
-                layer, out_size = buildlinear(layers[i], layer_input_sizes[i,:].prod())
-                self.model.append(layer)
-                layer_output_sizes[i,:] = out_size
-
-                if input_dimensions != 1:
-                    input_dimensions = 1                    
-                    routing[i] = ('v',) + routing[i]   #flag to apply View to input tensor
 
             elif layers[i][0].upper() == 'P':
                 layer, out_size = buildpool(layers[i], layer_input_sizes[i,:])
@@ -404,19 +368,17 @@ class NetBuilder(nn.Module):
 
 
     def forward(self, net_inputs):
-        
-        net_inputs = (net_inputs,)
-        
+                
         #array for storing output of every layer
         self.layer_outputs = []
         for i in range(len(self.model)):
-            #iterate through layer
+            #iterate through layers
 
             layer_inputs = []            
             #retrieve inputs            
             for r in self.routing[i]:                
                 if 'i' in str(r):                          
-                    layer_inputs.append(net_inputs[int(r[1:])])
+                    layer_inputs.append(net_inputs)
                 elif str(r) == 'v':
                     continue
                 elif r < 0:
@@ -441,10 +403,11 @@ class NetBuilder(nn.Module):
             self.layer_outputs.append(self.model[i](layer_input))
                
 
+        if len(self.model_outputs) == 1:
+            return self.layer_outputs[self.model_outputs[0]]
 
-
+        #return array in case more than one output required e.g. for aux loss
         return_outputs = []
-
         for output in self.model_outputs:
             o = self.layer_outputs[output]
             return_outputs.append(o)            
