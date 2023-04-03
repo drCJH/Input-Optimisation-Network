@@ -1,19 +1,16 @@
 #import libraries
 import datetime
 import torch
-import torch.optim as optim
 import torch.utils.data as tdata
 import torch.nn as nn
 from time import time
 import math as maths
-import random
-import matplotlib.pyplot as plt
-import network
 import argparse
+import numpy as np
 
 
 #import custom modules
-from out import logger, checkpoint
+from out import logger
 import data
 from net import Net
 import cityscapes
@@ -30,18 +27,19 @@ params = [
 #("dspaths", "A2D2/camera_lidar_semantic/"),
 ("sets", "val"),
 ("width", 768),
-("height", -1),
-
+("height", 384),
 
 #general config
 ("runname", "ION_Deeplab_Test"),
 ("GPU", 0),
 ("saveoutput", 1),
+("batchsize", 4),
 
 #checkpoint loading
-("cpfolder", "ION_Deeplab_Train_230330_134815"),
+("cpfolder", "ION_Deeplab_Train_230330_134815/"),
 ("loadepoch", 2),
-("segCP", "./deeplab_cityscapes"),
+("segCP", "./checkpoints/deeplab_cityscapes"),
+("jointopt", False),
 
 #net config
 ("ION", "unet"),
@@ -81,18 +79,10 @@ def run():
         dataloaders.append(tdata.DataLoader(d, batch_size=args.batchsize, shuffle=not d.isVal, num_workers=4, pin_memory=True))
     dsnames = args.sets.split(',')
     
-
-
-
-
     #initialise nets
-
     ION = Net(args.ION, o, input_size=datasets[0].input_size, output_size=[datasets[0].input_size[0]])
     net2 = Net(args.targetnet, o, input_size=datasets[0].input_size, output_size=[datasets[0].output_size[0]])
     
-
-
-
     #setup device
     if torch.cuda.device_count() == 0 or args.GPU < 0:  #no GPU or negative GPU argument passed        
         device = torch.device("cpu")        
@@ -114,27 +104,27 @@ def run():
     o.log(("\nrunning on device:", device), include_time=True)
 
 
-    #class for loading/saving checkpoints    
-    cp = checkpoint(o, "./checkpoints/" + runid, args.loadepoch)
+   
 
-    #load checkpoint        
-    ION, opt = cp.load(ION, args.cpfolder, "ION", opt)
+    ION.model.load_state_dict(torch.load("./checkpoints/" + args.cpfolder + "epoch_" + str(args.loadepoch) + "ION"))
     if args.jointopt:
-        net2, opt2 = cp.load(net2, args.cpfolder, "seg", opt2)
-
-    if args.loadepoch == 0 or args.jointopt == 0:
+        net2.model.load_state_dict(torch.load("./checkpoints/" + args.cpfolder + "epoch_" + str(args.loadepoch) + "seg"))
+    else:
         net2.model.load_state_dict(torch.load(args.segCP))
     
 
 
-    #main loop
     ION.eval()
     net2.eval()
-
-
+    
+    #total metrics across dataset
+    results = np.zeros((19, 8), dtype=np.float32)
+    #metrics of each image, list of tuples
+    immetrics = []
+    
+    #main loop
     for d_i in range(len(dataloaders)):    
-        gradtype = torch.no_grad()            
-            
+        gradtype = torch.no_grad()        
 
         o.log(("\n-------------------------------"))
         o.log("run id: " + runid + '\n')
@@ -150,21 +140,27 @@ def run():
                 input, target, filenames = batch["image"], batch["target"], batch["filename"]
                 output = ION(input.to(device))                                               
                 segout = net2(output)
+
+                for i in range(input.shape[0]):
+                    imstats = cityscapes.eval(target[i], segout[i])
+                    imstats2 = cityscapes.metrics(imstats)
+                    immetrics.append((filenames[i][filenames[i].rfind('/')+1:filenames[i].rfind('.')], imstats2[:,0].mean(), imstats2[:,1].mean(), imstats2[:,2].mean(), imstats2[:,3].mean()))                
+                    results[:,:4] += imstats
                     
-                #print stats every 1/10 epoch
+                #print progress every 1/10 epoch
                 if numiters > 0 and numiters % max(1, int(totiters / 10)) == 0:
                     print("Iteration " +  str(numiters) + " of " + str(totiters)) #don't log, just print to console
                     
-
                 if args.saveoutput:
                     for i in range(len(filenames)):
-                        o.save_image(input[i,...], filenames[i] + "_input.png")
-                        o.save_image(output[i,...], filenames[i] + "_output.png")                                
+                        fn = filenames[i][filenames[i].rfind('/')+1:filenames[i].rfind('.')]
+                        o.save_image(input[i,...], fn + "_input.png")
+                        o.save_image(output[i,...], fn + "_output.png")                                
                         
-                        outseg = cityscapes.displayseg(segout[i,:])
-                        target = cityscapes.displayseg(target[i,:])
-                        o.save_image(outseg, filenames[i] + "_outseg" + ".png")
-                        o.save_image(target, filenames[i] + "_target" + ".png")
+                        out_seg = cityscapes.displayseg(segout[i,...])
+                        out_target = cityscapes.displayseg(target[i,...])
+                        o.save_image(out_seg, fn + "_outseg" + ".png")
+                        o.save_image(out_target, fn + "_target" + ".png")
 
                 numiters += 1
 
@@ -173,7 +169,58 @@ def run():
         o.log(("Time taken:", o.formatTime(time() - t0)))
         o.log("-------------------------------\n")
 
-       
+
+    #log metrics for each class across dataset
+    results[:,4:] = cityscapes.metrics(results)
+    f = open("./output/" + runid + "/" + "results.txt", 'w')
+    f.writelines(["class,tp,tn,fp,fn,accuracy,precision,recall,IoU\n"])
+
+    for ii in range(1, len(cityscapes.classes)):
+        if cityscapes.classes[ii][2] < 19:
+            i = cityscapes.classes[ii][2]
+            line = cityscapes.classes[ii][0] #class name
+            for j in range(8):
+                numstr = '{0:.4f}'.format(results[i][j])
+                while (numstr[-1] == '0' or numstr[-1] == '.') and numstr.find('.') != -1:
+                    numstr = numstr[:-1]
+                line = line + "," + numstr
+            line = line + "\n"
+
+            f.writelines([line])
+
+    #compute mean/total across all classes
+    line = "mean"
+    for j in range(8):        
+        tot = 0.0
+        tot = results[:,j].sum()
+        if j > 3:
+            tot /= (19)           
+        numstr = '{0:.4f}'.format(tot)       
+        while (numstr[-1] == '0' or numstr[-1] == '.') and numstr.find('.') != -1:
+            numstr = numstr[:-1]        
+        line = line + "," + numstr
+
+    f.writelines([line])
+    f.close()
+    print("Results: " + line)
+
+
+    #log metrics for individual images
+    f = open("./output/" + runid + "/" + "results_by_image.txt", 'w')
+    f.writelines(["filename,accuracy,precision,recall,IoU\n"])
+ 
+    for i in range(0, len(immetrics)):    
+        line = immetrics[i][0]
+
+        for j in range(1, 5):
+            numstr = '{0:.6f}'.format(immetrics[i][j])
+            while (numstr[-1] == '0' or numstr[-1] == '.') and numstr.find('.') != -1:
+                numstr = numstr[:-1]
+            line = line + "," + numstr
+        line = line + "\n"
+
+        f.writelines([line])
+    f.close()
 
     o.log(("finished testing"), include_time=True)
                     

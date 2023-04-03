@@ -44,15 +44,22 @@ classes = [
 
 
 def idtotrainid(im0):
+    #converts standard cityscapes label image to training label ids
+    #im0 should be numpy array of dimensions (H,W)
     mapping = np.array([c.train_id for c in classes])
     return mapping[np.array(im0)]    
 
 
-def displayseg(im0):    
+def displayseg(im0):
+    #converts label image to colours for display
+    #im0 should be either numpy array of (H,W) using training label IDs or pytorch tensor of (19,H,W)
+    #returns numpy array of (H,W,3)
+
     if len(im0.shape) == 3:
         im1 = im0.cpu().detach().numpy().argmax(0)
+        #im1 = im0.detach().numpy().argmax(0)   #use if pytorch tensor already on CPU
     else:
-        im1 = im0#.cpu().detach().numpy()    
+        im1 = im0
     im2 = np.zeros((im1.shape[0], im1.shape[1], 3), np.uint8)
     for i in range(len(classes)):
         t_id = classes[i][2]
@@ -65,10 +72,12 @@ def displayseg(im0):
             im2[im1 == t_id, 2] = B
     return im2
 
-def GetFilenames(rootdir, set):    
+def GetFilenames(rootdir, set):
+    #retrieves paths for all images in the given dataset, assuming standard cityscapes directory structure
+    #rootdir should be path to first level folder within cityscapes folder e.g. '.../cityscapes/leftImg8bit/'
+    #set should be 'train', 'val', or 'test'
+
     trainIDs = False
-
-
     samples = []
     targets = []
     imgpath = rootdir + set + '/'
@@ -93,3 +102,58 @@ def GetFilenames(rootdir, set):
 
 
     return (samples, targets, trainIDs)    
+
+
+def metrics(results):
+    #computes accuracy, precision, recall, intersection over union per class for tp/tn/fp/fn matrix
+    #expected results: numpy array (19,4) containing tp, tn, fp, fn for each class (as output by eval())
+    #returns numpy array (19,4) containing accuracy, precision, recall, intersection over union per class
+
+    results2 = np.zeros((19, 4))
+    for i in range(0, 19):
+        
+        tp = max(results[i][0], 0.01)
+        tn = results[i][1]
+        fp = results[i][2]
+        fn = results[i][3]
+
+        accuracy = (tp + tn) / (tp + tn + fp + fn)
+        precision = tp / (tp + fp)
+        recall = tp / (tp + fn)
+        IoU = tp / (tp + fp + fn)
+
+        results2[i, 0] = accuracy
+        results2[i, 1] = precision
+        results2[i, 2] = recall
+        results2[i, 3] = IoU
+
+    return results2
+
+
+def eval(target, output):
+    #calculates true/false positives/negatives for each class in single output/target image pair
+    #expected target: numpy array of dimensions(H,W) in long format
+    #each element in target should be between 0 - 19 to denote class, ignored pixels should be 255
+    #expected output: pytorch GPU tensor of dimensions (19,H,W) in float32 format
+    #returns numpy array of dimesions (19,4) containing tp, tn, fp, fn for each class
+    
+    results = np.zeros((19, 4), dtype=np.float32)
+    pred = output.argmax(0)
+
+    n = (target != 255)
+    for i in range(0, 19):        
+        t = (target == i)
+        o = (pred == i).cpu().detach().numpy()
+        #o = (pred == i).detach().numpy()   #use if pytorch tensor already on CPU
+        
+        tp = (t & o) & n
+        tn = ((t==0) & (o==0)) & n
+        fp = ((t==0) & o) & n
+        fn = (t & (o==0)) & n
+
+        results[i, 0] = tp.sum()
+        results[i, 1] = tn.sum()
+        results[i, 2] = fp.sum()
+        results[i, 3] = fn.sum()
+    
+    return results

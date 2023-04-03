@@ -9,6 +9,7 @@ import numpy as np
 
 
 class logger():
+    #custom class for logging to console + log file
 
     def __init__(self, logloc, saveoutput=False):
         #create directory if it doesn't exist
@@ -28,7 +29,6 @@ class logger():
         hours = int(t/3600)
         minutes = int((t%3600)/60)
         seconds = t%60
-
         return str(hours) + ':' + str(minutes) + ':' + '{0:.3f}'.format(seconds)
 
     def log(self, text, toConsole=True, include_time=False):
@@ -58,6 +58,7 @@ class logger():
 
 
     def save_image(self, im, filename):
+        #saves torch tensor/np array as image file
 
         if len(im.shape) == 4: #whole batch passed, just take first sample
             im = im[0,...]
@@ -84,11 +85,9 @@ class logger():
 
 
 
-        
-
-
-
     def plotloss(self, eprange, loss, datanames):
+        #creates and saves plot of losses
+
         colours = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
         ax = []
         colidx = 0
@@ -111,6 +110,7 @@ class logger():
 
 
 class checkpoint():
+    #class for saving and loading checkpoints
 
     def __init__(self, log, cpfolder = "/", epoch = 0, keepevery=10, gpu=0):
          #epoch to start from

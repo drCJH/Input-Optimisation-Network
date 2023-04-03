@@ -5,9 +5,7 @@ import random
 import torch
 import torch.utils.data as data
 import numpy as np
-import math as maths
 import matplotlib.pyplot as plt
-import matplotlib.colors as colours
 
 #import custom modules
 from out import logger
@@ -16,7 +14,7 @@ import A2D2
 
 
 def display(images):
-
+    #display images using pyplot for debugging, expects list of pytorch tensors
     fig=plt.figure(figsize=(8, 8))
 
     columns = len(images)
@@ -116,16 +114,16 @@ def PrepDataSets(args):
 class segmentation_dataset(data.Dataset):
 
     def __init__(self, args, set):
-
         dsroot = args.dsRoot
         dspaths = args.dspaths.split(',')
 
         self.isVal = set in ["val", "test"]        
         self.args = args
+
+        #Get filenames
         self.samples = []
         self.targets = []
-        self.trainIDs = []
-
+        self.trainIDs = []  #bool to check whether images need to be converted to train ID labels
         for i in range(len(dspaths)):
             imgs, lbls, tIDs = [], [], False
             if "A2D2" in dspaths[i]:
