@@ -39,7 +39,8 @@ params = [
 ("cpfolder", "ION_Deeplab_Train_230330_134815/"),
 ("loadepoch", 2),
 ("segCP", "./checkpoints/deeplab_cityscapes"),
-("jointopt", False),
+("jointopt", 0),
+("useION", 1),
 
 #net config
 ("ION", "unet"),
@@ -138,8 +139,13 @@ def run():
             for b_i, batch in enumerate(dataloaders[d_i]):            
 
                 input, target, filenames = batch["image"], batch["target"], batch["filename"]
-                output = ION(input.to(device))                                               
+                if args.useION:
+                    output = ION(input.to(device)) 
+                else:
+                    output = input.to(device)                                              
+                
                 segout = net2(output)
+                
 
                 for i in range(input.shape[0]):
                     imstats = cityscapes.eval(target[i], segout[i])
@@ -155,7 +161,8 @@ def run():
                     for i in range(len(filenames)):
                         fn = filenames[i][filenames[i].rfind('/')+1:filenames[i].rfind('.')]
                         o.save_image(input[i,...], fn + "_input.png")
-                        o.save_image(output[i,...], fn + "_output.png")                                
+                        if args.useION:
+                            o.save_image(output[i,...], fn + "_output.png")                                
                         
                         out_seg = cityscapes.displayseg(segout[i,...])
                         out_target = cityscapes.displayseg(target[i,...])

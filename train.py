@@ -30,12 +30,12 @@ params = [
 ("height", 384),
 
 #data augmentation
-("flip", False),
-("mirror", True),
+("flip", 0),
+("mirror", 1),
 ("rotate", 0),
 ("crop", 0.1),
 ("noise", 0),
-("balance", True),
+("balance", 1),
 
 #general config
 ("runname", "ION_Deeplab_Train"),
@@ -45,7 +45,7 @@ params = [
 #checkpoint loading
 ("cpfolder", ""),
 ("loadepoch", 0),
-("segCP", "./deeplab_cityscapes"),
+("segCP", "./checkpoints/deeplab_cityscapes"),
 
 #Training parameters
 ("batchsize", 4),
@@ -54,7 +54,7 @@ params = [
 ("lrdecay", 0),
 ("weightdecay", 0.000001),
 ("momentum", 0.9),
-("jointopt", False),
+("jointopt", 0),
 
 #net config
 ("ION", "unet"),
